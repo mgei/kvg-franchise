@@ -80,7 +80,8 @@ finaldata <- casedata %>%
          KPraemie = Prämie*12,
          KTotal = KFranchise + KSelbstbeh + KPraemie) %>% 
   group_by(KKosten) %>% 
-  mutate(minFranchise = KTotal == min(KTotal))
+  mutate(minFranchise = if_else(KTotal == min(KTotal), "min", "z"),
+         minFranchise = if_else(KTotal == max(KTotal), "max", minFranchise))
 
 
 finaldata %>% 
@@ -89,11 +90,12 @@ finaldata %>%
   ggplot(aes(x = 1, y = Kosten)) +
   geom_col(aes(fill = factor(Aufwand, levels = c("KSelbstbeh", "KFranchise", "KPraemie"))), width = 0.8) +
   geom_text(data = finaldata, aes(label = scales::number(KTotal, big.mark = "'"), y = 2500, color = minFranchise), size = 4) +
-  scale_color_manual(values = c("black", "white")) +
+  scale_color_manual(values = c("red", "white", "black"), guide = F) +
   scale_x_continuous(limits = c(0.5,1.5)) +
   labs(fill = "", x = "gewählte Franchise", y = "Krankheitskosten",
-       title = "Jahresgesamtkosten Prämie + Franchise + Selbstbehalt",
-       subtitle = str_c(versicherung, kanton, alter, modell, unfall, sep = ", ")) +
+       title = "Gesamtkosten Prämie + Franchise + Selbstbehalt",
+       subtitle = str_c(versicherung, kanton, alter, modell, unfall, "2020", sep = ", ")) +
   facet_grid(rows = vars(KKosten), cols = vars(Franchise), switch = "both") +
   theme(axis.text = element_blank(),
-        axis.ticks = element_blank())
+        axis.ticks = element_blank(), axis.title = element_text(size = 15))
+
