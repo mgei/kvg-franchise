@@ -1,0 +1,194 @@
+---
+title: "Berechnung des Franchisen-Optimums in der OKV"
+author: "Martin Geissmann"
+date: "10/29/2019"
+output: html_document
+---
+
+```{r setup, message=F, warning=F}
+library(tidyverse)
+library(readxl)
+library(magrittr)
+
+unfalleinschluss <- function(unfall) {
+  Unfalleinschluss <- case_when(unfall == "Nein|nein|ohne Unfall|o. Unfall" ~ "OHN-UNF",
+                                isFALSE(unfall)       ~ "OHN-UNF",
+                                unfall == "Ja|ja|mit Unfall|m. Unfall|Unfalleinschluss"     ~ "MIT-UNF",
+                                isTRUE(unfall)        ~ "MIT-UNF",
+                                T                     ~ "OHN-UNF")
+  return(Unfalleinschluss)
+}
+
+tariftyp <- function(modell) {
+  Tariftyp <- case_when(modell == "Basis|Standard" ~ "TAR-BASE",
+                        modell == "andere|Andere|alternative|Alternative|diverse|Diverse|div" ~ "TAR-DIV",
+                        modell == "Hausarzt|Hausarztmodell" ~ "TAR-HAM",
+                        modell == "HMO"            ~ "TAR-HMO",
+                        T                          ~ "TAR-BASE")
+  return(Tariftyp)
+}
+
+altersklasse <- function(alter) {
+  Altersklasse <- case_when(alter == "Erwachsene" ~ "AKL-ERW",
+                            alter == "Jugendliche" ~ "AKL-JUG",
+                            alter == "Kinder"     ~ "TAR-KIN",
+                            T                     ~ "TAR-ERW")
+  return(Altersklasse)
+}
+```
+
+# Data
+
+Prämien Daten 2020: https://opendata.swiss/en/dataset/health-insurance-premiums
+
+Aufsichtsdaten Krankenversicherer als Referenz-Tabelle Krankenveirsicherer: https://www.bag.admin.ch/bag/de/home/versicherungen/krankenversicherung/krankenversicherung-versicherer-aufsicht/reporting/aufsichtsdaten.html
+
+```{r read}
+reference_table <- read_excel("data/aufsichtsdaten-okp-1996-2018.xlsx", sheet = "2018", skip = 3) %>% 
+  select(1:2) %>% 
+  set_colnames(c("Versicherer", "Versicherung")) %>% 
+  mutate(Versicherer = as.double(Versicherer)) %>% 
+  filter(!is.na(Versicherer), !is.na(Versicherung))
+
+premia <- read_excel("data/Prämien_CH.xlsx", sheet = "Export")
+
+premia %<>% left_join(reference_table, by = "Versicherer") %>% 
+  select(Versicherer, Versicherung, everything())
+
+premia %>% glimpse()
+```
+
+# OKV System
+
+* Jede in der Schweiz wohnhafte Person muss sich bei einer Krankenkasse nach KVG grundversichern (*Obligatorische Krankenversicherung OKV*).
+* Es können verschieden Franchise-Stufen zwischen 300 und 2'500 Franken gewählt werden. Durch das KVG gedeckte Krankheitskosten werden dabei erst ab dem Betrag der gewählten Franchise durch die Versicherung übernommen.
+* Darüber hinaus geht von den anfallenden Krankheitskosten ein Selbstbehalt von 10% zulasten des Versicherten. Der maximale Selbstbehalt p.a. ist auf 700 Franken limitiert.
+* Die Prämien sind abhängig vom Wohnort, der gewählten Franchise und des gewählten Krankenversicherers.
+* Weiter kann durch die Wahl eines alternativen Versicherungsmodell (z.B. Hausarzt- oder Telemedizin-Modell) die Prämie tiefer ausfallen.
+* Die Versicherer haben unterschiedliche Versicherungodelle im Angebot und decken teilweise nicht die gesamte gesetzliche Bandbreite an Franchisestufen ab.
+
+Die Funktionsweise des Prämien/Franchise/Selbstbehalt-Zusammenspiels soll nachfolgendes Beispiel veranschaulichen.
+
+```{r beispiel}
+kosten <- tibble(KKosten = c(0, 300, 500, 750, 1000, 1500, 1750, 2000, 3000, 5000, 10000, 50000))
+
+kanton <- "BS"
+unfall <- "ohne Unfall"
+modell <- "Standard" 
+alter <- "Erwachsene"
+versicherung <- "CSS Kranken-Versicherung AG"
+
+casedata <- premia %>% 
+  filter(Versicherung ==  versicherung,
+         Unfalleinschluss == unfalleinschluss(unfall),
+         Kanton == kanton,
+         Tariftyp == tariftyp(modell),
+         Altersklasse == altersklasse(alter)) %>% 
+  select(-Hoheitsgebiet) %>% 
+  mutate(Franchise = str_remove(Franchise, "FRA-") %>% as.double())
+
+combis <- casedata %>% 
+  expand(kosten, Franchise) %>% 
+  arrange(Franchise)
+
+finaldata <- casedata %>% 
+  left_join(combis, by = "Franchise") %>% 
+  # compute costs
+  rowwise() %>% 
+  mutate(KFranchise = min(KKosten, Franchise),
+         KSelbstbeh = max(min(700, (KKosten-Franchise)*0.1), 0),
+         KPraemie = Prämie*12,
+         KTotal = KFranchise + KSelbstbeh + KPraemie) %>% 
+  group_by(KKosten) %>% 
+  mutate(minFranchise = if_else(KTotal == min(KTotal), "min", "z"),
+         minFranchise = if_else(KTotal == max(KTotal), "max", minFranchise))
+
+
+finaldata %>% 
+  select(Franchise, KKosten, KFranchise, KSelbstbeh, KPraemie) %>%
+  gather(Aufwand, Kosten, -Franchise, -KKosten) %>% 
+  ggplot(aes(x = 1, y = Kosten)) +
+  geom_col(aes(fill = factor(Aufwand, levels = c("KSelbstbeh", "KFranchise", "KPraemie"))), width = 0.8) +
+  geom_text(data = finaldata, aes(label = scales::number(KTotal, big.mark = "'"), y = 2500, color = minFranchise), size = 4) +
+  scale_color_manual(values = c("red", "white", "black"), guide = F) +
+  scale_x_continuous(limits = c(0.5,1.5)) +
+  labs(fill = "", x = "gewählte Franchise", y = "Krankheitskosten",
+       title = "Gesamtkosten Prämie + Franchise + Selbstbehalt",
+       subtitle = str_c(versicherung, kanton, alter, modell, unfall, "2020", sep = ", ")) +
+  facet_grid(rows = vars(KKosten), cols = vars(Franchise), switch = "both") +
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(), axis.title = element_text(size = 15))
+```
+
+Die Grafik zeigt die Gesamtkosten welche sich zusammensetzen auf der Prämie, der Franchise und dem Selbstbehalt, gegeben eine gewählte Franchise (x-Achse) und anfallende Krankheitskosten (y-Achse). Als weisse Zahlen hervorgehoben sind die Franchisen welche gegeben eine bestimmte Krankheitskostenhöhe idealerweise gewählt wurde.
+
+Interessant dabei ist, dass in diesem Beispiel bis und mit jährlichen Krankheitskosten von 1'750 Franken idealerweise die höchste Franchise von 2'500 Franken gewählt wurde. Ab und über 2'000 Franken Krankheitskosten hingegen ist die tiefste Franchise von 300 Franken optimal. Die mittleren Franchisestufen sind in keinem der dargestellten Fällen optimal.
+
+# Systematische Betrachtung
+
+```{r systematic}
+kosten <- tibble(KKosten = seq(0, 3000, by = 10))
+
+hoheitsgebiet <- "CH"
+kanton <- "BS"
+unfall <- "ohne Unfall"
+modell <- "Standard" 
+alter <- "Erwachsene"
+versicherung <- "CSS Kranken-Versicherung AG"
+
+allcases <- premia %>% 
+  filter(Unfalleinschluss == unfalleinschluss(unfall),
+         Kanton == kanton,
+         Hoheitsgebiet == hoheitsgebiet,
+         Tariftyp == tariftyp(modell),
+         Altersklasse == altersklasse(alter)) %>% 
+  select(-Hoheitsgebiet) %>% 
+  mutate(Franchise = str_remove(Franchise, "FRA-") %>% as.double()) %>% 
+  group_by(Versicherer) %>% 
+  filter(any(Franchise == 300)) %>% 
+  filter(any(Franchise == 2500)) %>% 
+  ungroup()
+
+allcases
+
+combis <- allcases %>% 
+  expand(kosten, Franchise) %>% 
+  arrange(Franchise)
+
+finalall <- allcases %>% 
+  left_join(combis, by = "Franchise") %>% 
+  # compute costs
+  rowwise() %>% 
+  mutate(KFranchise = min(KKosten, Franchise),
+         KSelbstbeh = max(min(700, (KKosten-Franchise)*0.1), 0),
+         KPraemie = Prämie*12,
+         KTotal = KFranchise + KSelbstbeh + KPraemie) %>% 
+  ungroup() %>% 
+  group_by(KKosten, Versicherer) %>% 
+  mutate(minFranchise = (KTotal == min(KTotal)),
+         maxFranchise = (KTotal == max(KTotal)))
+
+beepr::beep()
+
+```
+
+```{r optimalgraph}
+finalall %>% 
+  ungroup() %>% 
+  filter(minFranchise) %>%
+  # filter(KKosten < 300, Franchise < 500)
+  ggplot(aes(x = Franchise, y = KKosten)) +
+  # geom_point(aes(color = KTotal), alpha = 0.8) +
+  geom_line(aes(color = Versicherung)) +
+  # scale_color_gradient(low = "blue", high = "red")+
+  theme_bw() +
+  theme(legend.position = "none")
+
+# ab welchen KKosten sollte man Franchise runtersetzen, pro Kasse?
+finalall %>% 
+  ungroup() %>% 
+  filter(minFranchise, Franchise == 300) %>%  
+  group_by(Versicherung) %>% 
+  filter(KKosten == min(KKosten)) %>% 
+  select(KKosten, everything())
+```
