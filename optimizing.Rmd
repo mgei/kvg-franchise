@@ -9,6 +9,7 @@ output: html_document
 library(tidyverse)
 library(readxl)
 library(magrittr)
+library(ggrepel)
 
 unfalleinschluss <- function(unfall) {
   Unfalleinschluss <- case_when(unfall == "Nein|nein|ohne Unfall|o. Unfall" ~ "OHN-UNF",
@@ -31,9 +32,20 @@ tariftyp <- function(modell) {
 altersklasse <- function(alter) {
   Altersklasse <- case_when(alter == "Erwachsene" ~ "AKL-ERW",
                             alter == "Jugendliche" ~ "AKL-JUG",
-                            alter == "Kinder"     ~ "TAR-KIN",
-                            T                     ~ "TAR-ERW")
+                            alter == "Kinder"     ~ "AKL-KIN",
+                            T                     ~ "AKL-ERW")
   return(Altersklasse)
+}
+
+shorten_name <- function(name, length = 20) {
+  l <- str_length(name)
+  
+  if (l > length) {
+    out <- paste0(str_sub(name, 1, length), ".")
+  } else{
+    out <- name
+  }
+  return(out)
 }
 ```
 
@@ -127,24 +139,54 @@ Interessant dabei ist, dass in diesem Beispiel bis und mit jährlichen Krankheit
 # Systematische Betrachtung
 
 ```{r systematic}
-kosten <- tibble(KKosten = seq(0, 3000, by = 10))
+kmin <- 1200
+kmax <- 2100
+kosten <- tibble(KKosten = seq(kmin, kmax, by = 10))
 
 hoheitsgebiet <- "CH"
-kanton <- "BS"
+# kanton <- "BS"
+kantone <- c("ZH",
+"BE",
+"LU",
+"UR",
+"SZ",
+"OW",
+"NW",
+"GL",
+"ZG",
+"FR",
+"SO",
+"BS",
+"BL",
+"SH",
+"AR",
+"AI",
+"SG",
+"GR",
+"AG",
+"TG",
+"TI",
+"VD",
+"VS",
+"NE",
+"GE",
+"JU")
+
 unfall <- "ohne Unfall"
-modell <- "Standard" 
+# modell <- "Standard" 
 alter <- "Erwachsene"
-versicherung <- "CSS Kranken-Versicherung AG"
 
 allcases <- premia %>% 
   filter(Unfalleinschluss == unfalleinschluss(unfall),
-         Kanton == kanton,
+         # Kanton == kanton,
+         Kanton %in% kantone,
          Hoheitsgebiet == hoheitsgebiet,
-         Tariftyp == tariftyp(modell),
+         # Tariftyp == tariftyp(modell),
          Altersklasse == altersklasse(alter)) %>% 
   select(-Hoheitsgebiet) %>% 
   mutate(Franchise = str_remove(Franchise, "FRA-") %>% as.double()) %>% 
   group_by(Versicherer) %>% 
+  # insurance has to offer both 300 and 2500
   filter(any(Franchise == 300)) %>% 
   filter(any(Franchise == 2500)) %>% 
   ungroup()
@@ -160,11 +202,12 @@ finalall <- allcases %>%
   # compute costs
   rowwise() %>% 
   mutate(KFranchise = min(KKosten, Franchise),
-         KSelbstbeh = max(min(700, (KKosten-Franchise)*0.1), 0),
-         KPraemie = Prämie*12,
+         KSelbstbeh = max(min(700, (KKosten-Franchise)*0.1), 0)) %>% 
+  ungroup() %>% 
+  mutate(KPraemie = Prämie*12,
          KTotal = KFranchise + KSelbstbeh + KPraemie) %>% 
   ungroup() %>% 
-  group_by(KKosten, Versicherer) %>% 
+  group_by(KKosten, Versicherer, Kanton, Tarif, Tariftyp) %>% 
   mutate(minFranchise = (KTotal == min(KTotal)),
          maxFranchise = (KTotal == max(KTotal)))
 
@@ -173,22 +216,250 @@ beepr::beep()
 ```
 
 ```{r optimalgraph}
-finalall %>% 
-  ungroup() %>% 
-  filter(minFranchise) %>%
-  # filter(KKosten < 300, Franchise < 500)
-  ggplot(aes(x = Franchise, y = KKosten)) +
-  # geom_point(aes(color = KTotal), alpha = 0.8) +
-  geom_line(aes(color = Versicherung)) +
-  # scale_color_gradient(low = "blue", high = "red")+
-  theme_bw() +
-  theme(legend.position = "none")
+# finalall %>% 
+#   ungroup() %>% 
+#   filter(minFranchise) %>%
+#   # filter(KKosten < 300, Franchise < 500)
+#   ggplot(aes(x = Franchise, y = KKosten)) +
+#   # geom_point(aes(color = KTotal), alpha = 0.8) +
+#   geom_line(aes(color = Versicherung)) +
+#   # scale_color_gradient(low = "blue", high = "red")+
+#   theme_bw() +
+#   theme(legend.position = "none")
 
 # ab welchen KKosten sollte man Franchise runtersetzen, pro Kasse?
-finalall %>% 
+(f <- finalall %>% 
   ungroup() %>% 
   filter(minFranchise, Franchise == 300) %>%  
-  group_by(Versicherung) %>% 
+  group_by(Versicherung, Kanton, Tarif, Tariftyp) %>% 
   filter(KKosten == min(KKosten)) %>% 
-  select(KKosten, everything())
+  select(KKosten, everything()))
+
+pready <- f %>% 
+  group_by(Versicherung, Kanton) %>% 
+  mutate(meanK = mean(KKosten)) %>% 
+  ungroup() %>% 
+  sample_n(size = nrow(.)) %>% # shuffles randomly
+  arrange(meanK) %>% 
+  mutate(Modell = if_else(Tariftyp == "TAR-BASE", "Standard", "Alternativ"))
+
+set.seed(27)
+
+pready %>% 
+  ggplot(aes(x = KKosten, y = reorder(interaction(Versicherung, Kanton), meanK), color = Modell)) +
+  geom_point(alpha = 0.4, size = 1) +
+  geom_text_repel(data = pready[c(1,80, sample(1:nrow(pready), 27), nrow(pready)-1000, nrow(pready)),],
+                  aes(label = paste0(shorten_name(Versicherung), " (", Kanton, ", ", Tarif, ")")), 
+                  hjust = 0, nudge_x = -1000, size = 2, alpha = 0.8, segment.color = "grey", segment.size = 0.2) +
+  scale_x_continuous(limits = c(kmin, kmax), labels = scales::number_format(big.mark = "'"),
+                     breaks = seq(kmin, kmax, 100)) +
+  # scale_color_discrete(guide = F) +
+  labs(title = "Krankheitskosten-Schwelle ab welcher sich die tiefste Franchise rechnet",
+       subtitle = "pro Versicherung, Kanton und Versicherungsmodell, Prämien 2020, nur Versicherungen mit\nsowohl 300 und 2500 im Angebot",
+       x = "Krankheitskosten-Schwelle") +
+  theme(#legend.position = "none", 
+        axis.line.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+```
+
+## Kinder
+
+```{r optiKinder}
+
+kmin <- 0
+kmax <- 650
+kosten <- tibble(KKosten = seq(kmin, kmax, by = 10))
+
+# unfall <- "ohne Unfall"
+# modell <- "Standard" 
+alter <- "Kinder"
+
+allcases <- premia %>% 
+  filter(#Unfalleinschluss == unfalleinschluss(unfall),
+         # Kanton == kanton,
+         Kanton %in% kantone,
+         Hoheitsgebiet == hoheitsgebiet,
+         # Tariftyp == tariftyp(modell),
+         Altersklasse == altersklasse(alter)) %>% 
+  select(-Hoheitsgebiet) %>% 
+  mutate(Franchise = str_remove(Franchise, "FRA-") %>% as.double()) %>% 
+  group_by(Versicherer) %>% 
+  # insurance has to offer both 300 and 2500
+  filter(any(Franchise == 0)) %>% 
+  filter(any(Franchise == 600)) %>% 
+  ungroup()
+
+allcases
+
+combis <- allcases %>% 
+  expand(kosten, Franchise) %>% 
+  arrange(Franchise)
+
+finalall <- allcases %>% 
+  left_join(combis, by = "Franchise") %>% 
+  # compute costs
+  rowwise() %>% 
+  mutate(KFranchise = min(KKosten, Franchise),
+         KSelbstbeh = max(min(700, (KKosten-Franchise)*0.1), 0)) %>% 
+  ungroup() %>% 
+  mutate(KPraemie = Prämie*12,
+         KTotal = KFranchise + KSelbstbeh + KPraemie) %>% 
+  ungroup() %>% 
+  group_by(KKosten, Versicherer, Kanton, Tarif, Tariftyp) %>% 
+  mutate(minFranchise = (KTotal == min(KTotal)),
+         maxFranchise = (KTotal == max(KTotal)))
+
+beepr::beep()
+
+```
+
+```{r optimalgraphKind}
+# finalall %>% 
+#   ungroup() %>% 
+#   filter(minFranchise) %>%
+#   # filter(KKosten < 300, Franchise < 500)
+#   ggplot(aes(x = Franchise, y = KKosten)) +
+#   # geom_point(aes(color = KTotal), alpha = 0.8) +
+#   geom_line(aes(color = Versicherung)) +
+#   # scale_color_gradient(low = "blue", high = "red")+
+#   theme_bw() +
+#   theme(legend.position = "none")
+
+# ab welchen KKosten sollte man Franchise runtersetzen, pro Kasse?
+(f <- finalall %>% 
+  ungroup() %>% 
+  filter(minFranchise, Franchise == 0) %>%  
+  group_by(Versicherung, Kanton, Tarif, Tariftyp) %>% 
+  filter(KKosten == min(KKosten)) %>% 
+  select(KKosten, everything()))
+
+pready <- f %>% 
+  group_by(Versicherung, Kanton) %>% 
+  mutate(meanK = mean(KKosten)) %>% 
+  ungroup() %>% 
+  sample_n(size = nrow(.)) %>% # shuffles randomly
+  arrange(meanK) %>% 
+  mutate(Modell = if_else(Tariftyp == "TAR-BASE", "Standard", "Alternativ"))
+
+set.seed(27)
+
+pready %>% 
+  ggplot(aes(x = KKosten, y = reorder(interaction(Versicherung, Kanton), meanK), color = Modell)) +
+  geom_point(alpha = 0.4, size = 1) +
+  geom_text_repel(data = pready[c(1,80, sample(1:nrow(pready), 27), nrow(pready)-1000, nrow(pready)),],
+                  aes(label = paste0(shorten_name(Versicherung), " (", Kanton, ", ", Tarif, ")")), 
+                  hjust = 0, nudge_x = -1000, size = 2, alpha = 0.8, segment.color = "grey", segment.size = 0.2) +
+  scale_x_continuous(limits = c(kmin, kmax), labels = scales::number_format(big.mark = "'"),
+                     breaks = seq(kmin, kmax, 100)) +
+  # scale_color_discrete(guide = F) +
+  labs(title = "Krankheitskosten-Schwelle ab welcher sich die tiefste Franchise rechnet",
+       subtitle = "pro Versicherung, Kanton und Versicherungsmodell, Prämien 2020, nur Versicherungen mit\nsowohl 300 und 2500 im Angebot",
+       x = "Krankheitskosten-Schwelle") +
+  theme(#legend.position = "none", 
+        axis.line.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
+```
+
+## Jugendliche
+
+```{r optiJugend}
+
+kmin <- 1200
+kmax <- 2000
+kosten <- tibble(KKosten = seq(kmin, kmax, by = 10))
+
+# unfall <- "ohne Unfall"
+# modell <- "Standard" 
+alter <- "Jugendliche"
+
+allcases <- premia %>% 
+  filter(#Unfalleinschluss == unfalleinschluss(unfall),
+         # Kanton == kanton,
+         Kanton %in% kantone,
+         Hoheitsgebiet == hoheitsgebiet,
+         # Tariftyp == tariftyp(modell),
+         Altersklasse == altersklasse(alter)) %>% 
+  select(-Hoheitsgebiet) %>% 
+  mutate(Franchise = str_remove(Franchise, "FRA-") %>% as.double()) %>% 
+  group_by(Versicherer) %>% 
+  # insurance has to offer both 300 and 2500
+  filter(any(Franchise == 300)) %>% 
+  filter(any(Franchise == 2500)) %>% 
+  ungroup()
+
+allcases
+
+combis <- allcases %>% 
+  expand(kosten, Franchise) %>% 
+  arrange(Franchise)
+
+finalall <- allcases %>% 
+  left_join(combis, by = "Franchise") %>% 
+  # compute costs
+  rowwise() %>% 
+  mutate(KFranchise = min(KKosten, Franchise),
+         KSelbstbeh = max(min(700, (KKosten-Franchise)*0.1), 0)) %>% 
+  ungroup() %>% 
+  mutate(KPraemie = Prämie*12,
+         KTotal = KFranchise + KSelbstbeh + KPraemie) %>% 
+  ungroup() %>% 
+  group_by(KKosten, Versicherer, Kanton, Tarif, Tariftyp) %>% 
+  mutate(minFranchise = (KTotal == min(KTotal)),
+         maxFranchise = (KTotal == max(KTotal)))
+
+beepr::beep()
+
+```
+
+```{r optimalgraphJugend}
+# finalall %>% 
+#   ungroup() %>% 
+#   filter(minFranchise) %>%
+#   # filter(KKosten < 300, Franchise < 500)
+#   ggplot(aes(x = Franchise, y = KKosten)) +
+#   # geom_point(aes(color = KTotal), alpha = 0.8) +
+#   geom_line(aes(color = Versicherung)) +
+#   # scale_color_gradient(low = "blue", high = "red")+
+#   theme_bw() +
+#   theme(legend.position = "none")
+
+# ab welchen KKosten sollte man Franchise runtersetzen, pro Kasse?
+(f <- finalall %>% 
+  ungroup() %>% 
+  filter(minFranchise, Franchise == 300) %>%  
+  group_by(Versicherung, Kanton, Tarif, Tariftyp) %>% 
+  filter(KKosten == min(KKosten)) %>% 
+  select(KKosten, everything()))
+
+pready <- f %>% 
+  group_by(Versicherung, Kanton) %>% 
+  mutate(meanK = mean(KKosten)) %>% 
+  ungroup() %>% 
+  sample_n(size = nrow(.)) %>% # shuffles randomly
+  arrange(meanK) %>% 
+  mutate(Modell = if_else(Tariftyp == "TAR-BASE", "Standard", "Alternativ"))
+
+set.seed(27)
+
+pready %>% 
+  ggplot(aes(x = KKosten, y = reorder(interaction(Versicherung, Kanton), meanK), color = Modell)) +
+  geom_point(alpha = 0.4, size = 1) +
+  geom_text_repel(data = pready[c(1,80, sample(1:nrow(pready), 27), nrow(pready)-1000, nrow(pready)),],
+                  aes(label = paste0(shorten_name(Versicherung), " (", Kanton, ", ", Tarif, ")")), 
+                  hjust = 0, nudge_x = -1000, size = 2, alpha = 0.8, segment.color = "grey", segment.size = 0.2) +
+  scale_x_continuous(limits = c(kmin, kmax), labels = scales::number_format(big.mark = "'"),
+                     breaks = seq(kmin, kmax, 100)) +
+  # scale_color_discrete(guide = F) +
+  labs(title = "Krankheitskosten-Schwelle ab welcher sich die tiefste Franchise rechnet",
+       subtitle = "pro Versicherung, Kanton und Versicherungsmodell, Prämien 2020, nur Versicherungen mit\nsowohl 300 und 2500 im Angebot",
+       x = "Krankheitskosten-Schwelle") +
+  theme(#legend.position = "none", 
+        axis.line.y = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank())
 ```

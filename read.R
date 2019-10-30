@@ -15,6 +15,31 @@ premia <- read_excel("data/Prämien_CH.xlsx", sheet = "Export")
 premia %<>% left_join(lut, by = "Versicherer") %>% 
   select(Versicherer, Versicherung, everything())
 
+lut_gemeinden <- read_excel("data/do-t-09.02-gwr-37.xlsx", sheet = 2)
+lut_gemeinden
+
+hmo <- read_excel("data/Regionen mit HMO-Standorten und Einzugsgebiete.xlsx")
+
+lut_hmo <- hmo %>% 
+  filter(!is.na(`Gemeinden-BFS`)) %>%
+  # summarise(maxgem = max(str_count(`Gemeinden-BFS`, ","))) # 180 is max
+  separate(`Gemeinden-BFS`, into = paste0("gem", 1:181), sep = ",", fill = "right") %>% 
+  gather(key, Gemeindecode, 
+         -Versicherer, -Kanton, -Hoheitsgebiet, -Geschäftsjahr, -Erhebungsjahr, -Region, -Tarif, -Tariftyp, -`HMO-ID`, -Eingeschränkt) %>% 
+  select(-key) %>% 
+  mutate(Gemeindecode = as.double(Gemeindecode)) %>% 
+  full_join(lut_gemeinden, by = c("Gemeindecode" = "GDENR")) %>% 
+  mutate(PlzGemeinde = paste(PLZ4, GDENAMK))
+
+# premiaF <- premia %>% 
+#   mutate(Franchise = str_remove(Franchise, "FRA-") %>% as.double())
+
+# premiaF %>% write_csv("shiny/data/premia.csv")
+# premiaF %>% saveRDS("shiny/data/premia.RDS")
+
+lut_hmo %>% write_csv("shiny/data/lut_hmo.csv")
+lut_hmo %>% saveRDS("shiny/data/lut_hmo.RDS")
+
 
 kosten <- tibble(KKosten = c(0, 500, 1000, 2000, 3000, 5000, 10000, 50000))
 
