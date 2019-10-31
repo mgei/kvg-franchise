@@ -29,7 +29,8 @@ kk_web <- bind_rows(
 ) %>% 
   mutate(weblink = paste0("http://", V2)) %>% 
   rename(VersNr = V1) %>% 
-  select(-V2)
+  select(-V2) %>% 
+  mutate(VersNr = str_remove(VersNr, " x") %>% as.double())
 
 kk_web %>% write_csv("shiny/data/kk_web.csv")
 kk_web %>% saveRDS("shiny/data/kk_web.RDS")

@@ -17,6 +17,13 @@ kantone <- kantone[order(kantone)]
 premia <- readRDS("data/premia.RDS")
 lut_hmo <- readRDS("data/lut_hmo.RDS")
 
+weblinks <- readRDS("data/kk_web.RDS")
+
+premia %<>% 
+  left_join(weblinks, by = c("Versicherer" = "VersNr")) %>% 
+  mutate(VersLink = paste0("<a href='", weblink, "'>", Versicherung, "</a>"))
+  
+
 # helper functions ----
 
 unfalleinschluss <- function(unfall) {

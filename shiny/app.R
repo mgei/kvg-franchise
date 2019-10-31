@@ -74,7 +74,8 @@ server <- function(input, output) {
         group_by(KKosten) %>% 
         mutate(minFranchise = if_else(KTotal == min(KTotal), "min", "z"),
                minFranchise = if_else(KTotal == max(KTotal), "max", minFranchise)) %>% 
-        ungroup()
+        ungroup() %>% 
+        mutate(alpha = "normal")
     } else {
       validate(
         need(input$plz, 
@@ -97,23 +98,50 @@ server <- function(input, output) {
         group_by(KKosten) %>% 
         mutate(minFranchise = if_else(KTotal == min(KTotal), "min", "z"),
                minFranchise = if_else(KTotal == max(KTotal), "max", minFranchise)) %>% 
-        ungroup()
+        ungroup() %>% 
+        mutate(alpha = "normal")
     }
 
   })
   
+  plotdata <- reactive({
+    
+    r <- input$table_rows_selected
+    
+    if (length(r)) {
+      d <- data() %>% 
+        arrange(KTotal) %>% 
+        mutate(alpha = if_else(row_number() == r, "highlight", "normal"))
+    } else{
+      d <- data()
+    }
+    
+    d %<>% 
+      select(Versicherung, Tarif, Franchise, KFranchise, KSelbstbeh, KPraemie, KTotal, alpha) %>%
+      gather(Kosten, Wert, -Versicherung, -Tarif, -Franchise, -KTotal, -alpha)
+    
+    d
+
+  })
+  
   output$graphly <- renderPlotly({
-    p <- data() %>% 
-      select(Versicherung, Tarif, Franchise, KFranchise, KSelbstbeh, KPraemie, KTotal) %>% 
-      gather(Kosten, Wert, -Versicherung, -Tarif, -Franchise, -KTotal) %>% 
-      ggplot(aes(x = reorder(paste0(Versicherung, Tarif, Franchise), KTotal), 
+    p <- plotdata() %>%
+      ggplot(aes(x = reorder(paste0(Versicherung, Tarif, Franchise), KTotal),
                  y = Wert, fill = Kosten, text = paste0(Versicherung, ", ", Tarif, ", F: ", Franchise))) +
+      # scale_alpha_manual(values = c(1, 0.4), guide = "none") +
+      # scale_alpha_discrete(guide = "none") +
       geom_col() +
       theme(legend.position = "bottom",
             axis.line.x = element_blank(),
             axis.text.x = element_blank(),
             axis.ticks.x = element_blank(),
             axis.title.x = element_blank())
+    
+    r <- input$table_rows_selected
+    if (length(r)) {
+      p <- p +
+        geom_col(data = plotdata() %>% filter(alpha == "highlight"), fill = "yellow")
+    }
     
     p %>% 
       ggplotly(tooltip = "text") %>% 
@@ -122,13 +150,38 @@ server <- function(input, output) {
   
   })
   
+  observe({
+    d <- event_data("plotly_click")
+    if (is.null(d)) print("Click events appear here (double-click to clear)") else print(d$x)
+  })
+  
+  plotly_x <- reactive({
+    event_data("plotly_click")$x
+  })
+  
+  
   output$table <- renderDataTable({
     datatable(data() %>% 
-                select(Versicherung, Tariftyp, Franchise, Prämie, KFranchise, KSelbstbeh, KTotal) %>% 
+                select(VersLink, Tariftyp, Franchise, Prämie, KFranchise, KSelbstbeh, KTotal) %>% 
                 arrange(KTotal),
               # options = l
-              rownames = F)
+              rownames = F, escape = F, selection = "single", 
+              options=list(stateSave = TRUE))
         
+  })
+  
+  tableproxy = dataTableProxy("table")
+  
+  observeEvent(event_data("plotly_click"), {
+    tableproxy %>% 
+      selectRows(as.numeric(plotly_x())) %>% 
+      selectPage(which(input$table_rows_all == plotly_x()) %/% input$table_state$length + 1)
+  })
+  
+  observe({
+     r <- input$table_rows_selected
+
+     print(r)
   })
 }
 
