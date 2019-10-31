@@ -102,14 +102,6 @@ server <- function(input, output) {
 
   })
   
-  # output$graph <- renderPlot({
-  #   data() %>% 
-  #     select(Versicherung, Tarif, Franchise, KFranchise, KSelbstbeh, KPraemie, KTotal) %>% 
-  #     gather(Kosten, Wert, -Versicherung, -Tarif, -Franchise, -KTotal) %>% 
-  #     ggplot(aes(x = reorder(paste0(Versicherung, Tarif, Franchise), KTotal), y = Wert, fill = Kosten)) +
-  #     geom_col()
-  # })
-  
   output$graphly <- renderPlotly({
     p <- data() %>% 
       select(Versicherung, Tarif, Franchise, KFranchise, KSelbstbeh, KPraemie, KTotal) %>% 
@@ -137,17 +129,6 @@ server <- function(input, output) {
               # options = l
               rownames = F)
         
-  })
-  
-  # observe({
-  #   print(altersklasse(input$alter))
-  #   print(unfalleinschluss(input$unfall))
-  #   print(input$kanton)
-  #   print(tariftyp(input$modell))
-  # })
-  # 
-  observe({
-    print(data())
   })
 }
 
