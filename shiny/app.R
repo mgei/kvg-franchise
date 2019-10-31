@@ -9,19 +9,18 @@ ui <- function(req) {dashboardPage(
     checkboxInput("unfall", label = "Unfall mitversichern", value = F),
     radioButtons("modell", label = NULL, choices = c("nur Standard Grundversicherungen", "auch alternative Modelle")),
     uiOutput("plzfield"),
-    # uiOutput("inputcomp"),
     sliderInput("kkosten", label = "Erwartete Krankheitskosten", min = 0, max = 10000, value = 1000, step = 10)
   ),
   dashboardBody(
-    # fluidRow(
-    #   box(
-    #     plotOutput("graph"),
-    #     width = 12
-    #   )
-    # ),
     fluidRow(
       box(
-        # plotlyOutput("graphly"),
+        plotlyOutput("graphly"),
+        width = 12
+      )
+    ),
+    fluidRow(
+      box(
+        DTOutput("table"),
         width = 12
       )
     )
@@ -42,37 +41,65 @@ server <- function(input, output) {
   
   output$plzfield <- renderUI({
     disabled(
-      # autocomplete_input("plz", "PLZ Ort", max_options = 100,
-      #                    paste0(1:9, " Dorf"))
-                         # filter(lut_hmo, KTKZ == input$kanton, !is.na(PLZ4)) %>% .[["PlzGemeinde"]])
-      textInput("hans", "Dieter")
+      autocomplete_input("plz", "PLZ Ort", max_options = 100,
+      filter(lut_hmo, KTKZ == input$kanton, !is.na(PLZ4)) %>% .[["PlzGemeinde"]])
     )
   })
   
-  # output$inputcomp <- renderUI({
-  #   disabled(
-  #     autocomplete_input("element", "PLZ Ort", max_options = 100,
-  #                        paste0(1:9, " Dorf"))
-  #   )
-  # })
+  praemienregion <- reactive({
+    req(input$plz)
+    
+    lut_hmo %>% 
+      filter(PlzGemeinde == input$plz) %>% 
+      head(n = 1) %>% 
+      pull(Region)
+  })
   
   data <- reactive({
-    premia %>%
-      filter(Unfalleinschluss == unfalleinschluss(input$unfall),
-             Kanton == input$kanton,
-             Tariftyp %in%  tariftyp(input$modell),
-             Altersklasse == altersklasse(input$alter),
-             Altersuntergruppe %in% c(NA_character_, "K1")) %>%
-      mutate(KKosten = input$kkosten) %>% 
-      rowwise() %>% 
-      mutate(KFranchise = min(KKosten, Franchise),
-             KSelbstbeh = max(min(700, (KKosten-Franchise)*0.1), 0),
-             KPraemie = Prämie*12,
-             KTotal = KFranchise + KSelbstbeh + KPraemie) %>% 
-      group_by(KKosten) %>% 
-      mutate(minFranchise = if_else(KTotal == min(KTotal), "min", "z"),
-             minFranchise = if_else(KTotal == max(KTotal), "max", minFranchise)) %>% 
-      ungroup()
+    
+    if (input$modell == "nur Standard Grundversicherungen") {
+      premia %>%
+        filter(Unfalleinschluss == unfalleinschluss(input$unfall),
+               Kanton == input$kanton,
+               Tariftyp %in%  tariftyp(input$modell),
+               Altersklasse == altersklasse(input$alter),
+               Altersuntergruppe %in% c(NA_character_, "K1")) %>%
+        mutate(KKosten = input$kkosten) %>% 
+        rowwise() %>% 
+        mutate(KFranchise = min(KKosten, Franchise),
+               KSelbstbeh = max(min(700, (KKosten-Franchise)*0.1), 0),
+               KPraemie = Prämie*12,
+               KTotal = KFranchise + KSelbstbeh + KPraemie) %>% 
+        ungroup() %>% 
+        group_by(KKosten) %>% 
+        mutate(minFranchise = if_else(KTotal == min(KTotal), "min", "z"),
+               minFranchise = if_else(KTotal == max(KTotal), "max", minFranchise)) %>% 
+        ungroup()
+    } else {
+      validate(
+        need(input$plz, 
+             "Alternative Modelle insbesondere HMO-Modelle sind teilweise unterkantonal nach Prämienregionen aufgeteilt. Bitte geben Sie links Ihre Postleitzahl ein.")
+      )
+      premia %>%
+        filter(Unfalleinschluss == unfalleinschluss(input$unfall),
+               Kanton == input$kanton,
+               Tariftyp %in%  tariftyp(input$modell),
+               Altersklasse == altersklasse(input$alter),
+               Altersuntergruppe %in% c(NA_character_, "K1"),
+               Region == praemienregion()) %>%
+        mutate(KKosten = input$kkosten) %>% 
+        rowwise() %>% 
+        mutate(KFranchise = min(KKosten, Franchise),
+               KSelbstbeh = max(min(700, (KKosten-Franchise)*0.1), 0),
+               KPraemie = Prämie*12,
+               KTotal = KFranchise + KSelbstbeh + KPraemie) %>% 
+        ungroup() %>% 
+        group_by(KKosten) %>% 
+        mutate(minFranchise = if_else(KTotal == min(KTotal), "min", "z"),
+               minFranchise = if_else(KTotal == max(KTotal), "max", minFranchise)) %>% 
+        ungroup()
+    }
+
   })
   
   # output$graph <- renderPlot({
@@ -103,6 +130,15 @@ server <- function(input, output) {
   
   })
   
+  output$table <- renderDataTable({
+    datatable(data() %>% 
+                select(Versicherung, Tariftyp, Franchise, Prämie, KFranchise, KSelbstbeh, KTotal) %>% 
+                arrange(KTotal),
+              # options = l
+              rownames = F)
+        
+  })
+  
   # observe({
   #   print(altersklasse(input$alter))
   #   print(unfalleinschluss(input$unfall))
@@ -110,12 +146,9 @@ server <- function(input, output) {
   #   print(tariftyp(input$modell))
   # })
   # 
-  # observe({
-  #   print(data() %>% 
-  #           select(Versicherung, Tarif, Franchise, KFranchise, KSelbstbeh, KPraemie, KTotal) %>% 
-  #           gather(Kosten, Wert, -Versicherung, -Tarif, -Franchise, -KTotal) %>% 
-  #           filter(KTotal == max(KTotal)))
-  # })
+  observe({
+    print(data())
+  })
 }
 
 shinyApp(ui, server)

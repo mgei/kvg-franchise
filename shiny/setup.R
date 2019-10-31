@@ -5,6 +5,7 @@ library(dqshiny)
 
 library(tidyverse)
 library(plotly)
+library(DT)
 
 
 # data ----
