@@ -3,17 +3,26 @@ library(readxl)
 library(magrittr)
 
 
-lut <- read_excel("data/aufsichtsdaten-okp-1996-2018.xlsx", sheet = "2018", skip = 3) %>% 
+lut <- read_excel("data/2021/aufsichtsdaten-okp-1996-2019.xlsx", sheet = "2019", skip = 3) %>% 
   select(1:2) %>% 
   set_colnames(c("Versicherer", "Versicherung")) %>% 
   mutate(Versicherer = as.double(Versicherer)) %>% 
   filter(!is.na(Versicherer), !is.na(Versicherung))
 
 
-premia <- read_excel("data/Prämien_CH.xlsx", sheet = "Export")
+premia <- read_csv("data/2021/Prämien_CH.csv")
 
-premia %<>% left_join(lut, by = "Versicherer") %>% 
+premia <- premia %>% 
+  left_join(lut, by = "Versicherer") %>% 
   select(Versicherer, Versicherung, everything())
+
+
+premia %>% saveRDS("data/2021/premia.RDS") 
+
+
+
+
+
 
 lut_gemeinden <- read_excel("data/do-t-09.02-gwr-37.xlsx", sheet = 2)
 lut_gemeinden
